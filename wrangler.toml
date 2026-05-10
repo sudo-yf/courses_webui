@@ -1,0 +1,9 @@
+name = "course-recordings"
+compatibility_date = "2026-02-05"
+workers_dev = true
+routes = [
+  { pattern = "courses.20060618.xyz", custom_domain = true },
+]
+
+[assets]
+directory = "./dist-course-site"

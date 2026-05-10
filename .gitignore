@@ -1,0 +1,13 @@
+.DS_Store
+.env
+.env.*
+node_modules/
+.wrangler/
+
+# Generated build output
+dist-course-site/
+public/courses/
+public/course-assets/
+public/llms.txt
+public/llms-full.txt
+public/course-sitemap.xml

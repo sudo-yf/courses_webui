@@ -1,0 +1,17 @@
+{
+  "name": "courses-webui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-course-recordings.mjs && node scripts/build-course-domain.mjs",
+    "dev": "wrangler dev --local --port 8787",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "dependencies": {
+    "katex": "^0.16.22"
+  },
+  "devDependencies": {
+    "wrangler": "^4.90.0"
+  }
+}
