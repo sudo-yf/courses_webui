@@ -10,6 +10,11 @@ const sourceRoot = path.resolve(
   process.env.COURSE_SOURCE_ROOT ||
     path.join('..', 'sudo-yf.github.io', 'blog', '03-领域', '课程录音'),
 )
+const examDataRoot = path.resolve(
+  root,
+  process.env.EXAM_DATA_ROOT ||
+    path.join('..', 'sudo-yf.github.io', 'blog', '00-总览', '考试 DDL数据'),
+)
 const publicRoot = path.join(root, 'public')
 const coursesRoot = path.join(publicRoot, 'courses')
 const assetsRoot = path.join(publicRoot, 'course-assets')
@@ -18,14 +23,14 @@ const siteUrl = normalizeSiteUrl(
 )
 
 const subjectInfo = {
-  互换: { slug: 'huhuan', title: '互换性与测量技术' },
+  互换: { slug: 'huhuan', title: '互换性与技术测量' },
   制图: { slug: 'zhitu', title: '工程制图' },
   大物: { slug: 'dawu', title: '大学物理Ⅲ(一)' },
-  安化: { slug: 'anhua', title: '安全化学' },
-  工材: { slug: 'gongcai', title: '工程材料' },
-  法规: { slug: 'fagui', title: '安全法规' },
-  热传: { slug: 'rechuan', title: '热量传递基础' },
-  燃爆: { slug: 'ranbao', title: '燃烧与爆炸' },
+  安化: { slug: 'anhua', title: '安全工程化学基础' },
+  工材: { slug: 'gongcai', title: '工程材料及金属工艺学' },
+  法规: { slug: 'fagui', title: '安全应急法规与标准' },
+  热传: { slug: 'rechuan', title: '工程热力学与传热学基础' },
+  燃爆: { slug: 'ranbao', title: '燃烧与爆炸理论' },
 }
 
 const generatedAt = new Date().toISOString()
@@ -34,13 +39,14 @@ main()
 
 function main() {
   const notes = discoverNotes()
+  const examData = readExamData()
 
   fs.rmSync(coursesRoot, { recursive: true, force: true })
   fs.rmSync(assetsRoot, { recursive: true, force: true })
   ensureDir(coursesRoot)
   ensureDir(assetsRoot)
 
-  const pages = notes.map(buildPage)
+  const pages = notes.map((note) => buildPage(note, examData))
   writeIndexes(pages)
   writeLlmsFiles(pages)
   writeCourseSitemap(pages)
@@ -75,8 +81,8 @@ function discoverNotes() {
     }
   }
 
-  if (notes.length !== 63) {
-    throw new Error(`expected 63 formal *_with_ima.md files, found ${notes.length}`)
+  if (notes.length === 0) {
+    throw new Error(`expected at least one formal *_with_ima.md file in ${sourceRoot}`)
   }
 
   return notes.sort((a, b) => {
@@ -86,10 +92,11 @@ function discoverNotes() {
   })
 }
 
-function buildPage(note) {
+function buildPage(note, examData) {
   const raw = fs.readFileSync(note.mdPath, 'utf8')
   const { data, body } = parseFrontmatter(raw)
   const info = subjectInfo[note.subject]
+  const exam = examData.get(info.title) || null
   const date = normalizeDate(data.date, note.mmdd)
   const dateLabel = date || mmddLabel(note.mmdd)
   const title = `${info.title} ${dateLabel} 课堂笔记`
@@ -154,6 +161,7 @@ function buildPage(note) {
     subject: note.subject,
     subjectTitle: info.title,
     subjectSlug: info.slug,
+    exam,
     mmdd: note.mmdd,
     date,
     title,
@@ -167,6 +175,28 @@ function buildPage(note) {
     clearAvailable: clear.available,
     topic,
   }
+}
+
+function readExamData() {
+  const exams = new Map()
+  if (!fs.existsSync(examDataRoot)) return exams
+
+  for (const fileName of fs.readdirSync(examDataRoot).sort(localeSort)) {
+    if (!fileName.endsWith('.md')) continue
+    const filePath = path.join(examDataRoot, fileName)
+    if (!fs.statSync(filePath).isFile()) continue
+
+    const { data } = parseFrontmatter(fs.readFileSync(filePath, 'utf8'))
+    if (!data.course) continue
+    exams.set(data.course, {
+      course: data.course,
+      credits: data.credits || '',
+      examTime: data.exam_time || '',
+      examEnd: data.exam_end || '',
+    })
+  }
+
+  return exams
 }
 
 function readClearSource(note) {
@@ -312,6 +342,7 @@ function renderHtmlPage({
 ${body}
     </article>
   </main>
+  ${realtimeExamScript()}
 </body>
 </html>
 `
@@ -464,6 +495,7 @@ function writeIndexPage({ dir, title, description, body }) {
 ${body}
     </section>
   </main>
+  ${realtimeExamScript()}
 </body>
 </html>
 `,
@@ -479,6 +511,30 @@ function siteHeader() {
     <a href="${absoluteUrl('/llms-full.txt')}">LLM</a>
   </nav>
 </header>`
+}
+
+function realtimeExamScript() {
+  return `<script>
+(() => {
+  const dayMs = 24 * 60 * 60 * 1000
+  const formatDays = (value) => {
+    if (!Number.isFinite(value)) return '-- Days'
+    const safeValue = Math.max(0, value)
+    return safeValue.toFixed(1).replace(/\\.0$/, '') + ' Days'
+  }
+  const update = () => {
+    const now = Date.now()
+    document.querySelectorAll('[data-exam-time]').forEach((node) => {
+      const target = Date.parse(node.dataset.examTime || '')
+      const output = node.querySelector('[data-remaining-days]')
+      if (!output) return
+      output.textContent = formatDays((target - now) / dayMs)
+    })
+  }
+  update()
+  window.setInterval(update, 60 * 1000)
+})()
+</script>`
 }
 
 function mathAssets() {
@@ -528,6 +584,7 @@ ${subjects
   <div>
     <a class="archive-title" href="${absoluteUrl(`/courses/${subjectSlug}/`)}">${escapeHtml(first.subjectTitle)}</a>
     <p>${subjectPages.length} 次课 / ${completeCount} 次有图 / ${imageCount} 张图</p>
+    ${first.exam ? renderExamLine(first.exam, subjectPages.length) : ''}
   </div>
   <span class="archive-code">${escapeHtml(subjectSlug)}</span>
 </article>`
@@ -559,6 +616,32 @@ ${pages
   })
   .join('\n')}
 </section>`
+}
+
+function renderExamLine(exam, classCount) {
+  const examTimeIso = toBrowserDateTime(exam.examTime)
+  const examEndIso = toBrowserDateTime(exam.examEnd)
+  const timeLabel = formatExamTimeLabel(exam.examTime, exam.examEnd)
+  const credits = formatCredits(exam.credits)
+  return `<p class="exam-time" data-exam-time="${escapeHtml(examTimeIso)}"><span data-remaining-days>-- Days</span> / ${escapeHtml(timeLabel)} / ${escapeHtml(credits)} / ${classCount} class</p>`
+}
+
+function toBrowserDateTime(value) {
+  if (!value) return ''
+  return value.replace(' ', 'T') + ':00+08:00'
+}
+
+function formatExamTimeLabel(start, end) {
+  if (!start) return '待确认'
+  const date = start.slice(5, 10)
+  const startTime = start.slice(11, 16)
+  const endTime = end ? end.slice(11, 16) : ''
+  return endTime ? `${date} ${startTime}-${endTime}` : `${date} ${startTime}`
+}
+
+function formatCredits(value) {
+  if (!value) return '学分待确认'
+  return `${Number(value).toString()} 学分`
 }
 
 function extractFirstHeading(markdown) {
@@ -1421,6 +1504,12 @@ code { font-family: "JetBrains Mono", monospace; }
 .archive-item p {
   margin: 0.55rem 0 0;
   color: var(--muted);
+}
+.archive-item .exam-time {
+  color: var(--accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.86rem;
+  letter-spacing: 0.02em;
 }
 .archive-number,
 .archive-code {

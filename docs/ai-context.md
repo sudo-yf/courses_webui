@@ -20,3 +20,10 @@
 - done: `npm run build` generated 63 notes and 1143 image references.
 - done: generated pages include clear panels, clear links, and `clear.md` mirrors when source exists.
 - done: Playwright local checks passed for desktop/mobile clear open-close behavior, missing-clear fallback, no horizontal overflow, no console errors.
+
+
+# Update 2026-05-10
+- Exam metadata now comes from `00-总览/考试 DDL数据/*.md` frontmatter.
+- Homepage renders `XX.x Days / MM-DD HH:mm-HH:mm / 学分 / N class`.
+- Remaining days are recalculated in the browser every minute.
+- Verified online homepage after deploy version `34c84bee-2b84-4363-b4d1-b992d189a805`.
