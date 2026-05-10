@@ -583,7 +583,6 @@ ${subjects
   <span class="archive-number">${String(index + 1).padStart(2, '0')}</span>
   <div>
     <a class="archive-title" href="${absoluteUrl(`/courses/${subjectSlug}/`)}">${escapeHtml(first.subjectTitle)}</a>
-    <p>${subjectPages.length} 次课 / ${completeCount} 次有图 / ${imageCount} 张图</p>
     ${first.exam ? renderExamLine(first.exam, subjectPages.length) : ''}
   </div>
   <span class="archive-code">${escapeHtml(subjectSlug)}</span>
