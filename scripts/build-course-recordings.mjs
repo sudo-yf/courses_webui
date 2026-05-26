@@ -1,20 +1,15 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import katex from 'katex'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(__dirname, '..')
-const sourceRoot = path.resolve(
-  root,
-  process.env.COURSE_SOURCE_ROOT ||
-    path.join('..', 'sudo-yf.github.io', 'blog', '03-领域', '课程录音'),
-)
-const examDataRoot = path.resolve(
-  root,
-  process.env.EXAM_DATA_ROOT ||
-    path.join('..', 'sudo-yf.github.io', 'blog', '00-总览', '考试 DDL数据'),
-)
+const sourceRoot =
+  process.env.COURSE_SOURCE_ROOT || discoverCourseSourceRoot()
+const examRoot =
+  process.env.COURSE_EXAM_ROOT || discoverExamRoot()
 const publicRoot = path.join(root, 'public')
 const coursesRoot = path.join(publicRoot, 'courses')
 const assetsRoot = path.join(publicRoot, 'course-assets')
@@ -23,14 +18,15 @@ const siteUrl = normalizeSiteUrl(
 )
 
 const subjectInfo = {
-  互换: { slug: 'huhuan', title: '互换性与技术测量' },
+  互换: { slug: 'huhuan', title: '互换性与测量技术' },
   制图: { slug: 'zhitu', title: '工程制图' },
   大物: { slug: 'dawu', title: '大学物理Ⅲ(一)' },
-  安化: { slug: 'anhua', title: '安全工程化学基础' },
-  工材: { slug: 'gongcai', title: '工程材料及金属工艺学' },
-  法规: { slug: 'fagui', title: '安全应急法规与标准' },
-  热传: { slug: 'rechuan', title: '工程热力学与传热学基础' },
-  燃爆: { slug: 'ranbao', title: '燃烧与爆炸理论' },
+  安化: { slug: 'anhua', title: '安全化学' },
+  安原: { slug: 'anyuan', title: '安全学原理' },
+  工材: { slug: 'gongcai', title: '工程材料' },
+  法规: { slug: 'fagui', title: '安全法规' },
+  热传: { slug: 'rechuan', title: '热量传递基础' },
+  燃爆: { slug: 'ranbao', title: '燃烧与爆炸' },
 }
 
 const generatedAt = new Date().toISOString()
@@ -39,15 +35,27 @@ main()
 
 function main() {
   const notes = discoverNotes()
-  const examData = readExamData()
+  const examBySubjectSlug = readExamSchedule()
 
   fs.rmSync(coursesRoot, { recursive: true, force: true })
   fs.rmSync(assetsRoot, { recursive: true, force: true })
   ensureDir(coursesRoot)
   ensureDir(assetsRoot)
 
-  const pages = notes.map((note) => buildPage(note, examData))
-  writeIndexes(pages)
+  const pages = notes.map(buildPage)
+  const bySubjectSlug = groupBy(pages, (page) => page.subjectSlug)
+  const noteNavByPageUrl = buildNoteNavByPageUrl(bySubjectSlug)
+  for (const page of pages) {
+    const outputDir = path.join(coursesRoot, page.subjectSlug, page.date || page.mmdd)
+    if (!fs.existsSync(path.join(outputDir, 'index.html'))) continue
+    const html = fs.readFileSync(path.join(outputDir, 'index.html'), 'utf8')
+    const injected = html.replace(
+      '__NOTE_NAV__',
+      noteNavByPageUrl.get(page.pageUrl) || '',
+    )
+    if (injected !== html) fs.writeFileSync(path.join(outputDir, 'index.html'), injected)
+  }
+  writeIndexes(pages, examBySubjectSlug)
   writeLlmsFiles(pages)
   writeCourseSitemap(pages)
 
@@ -55,6 +63,116 @@ function main() {
   console.log(
     `[course-recordings] generated ${pages.length} notes, ${imageRefs} image references`,
   )
+}
+
+function discoverCourseSourceRoot() {
+  const candidates = [
+    '/Users/a123/sudo-yf.github.io/blog/03-领域/课程录音',
+    path.resolve(root, '..', 'sudo-yf.github.io', 'blog', '03-领域', '课程录音'),
+    path.resolve(root, '..', '..', '03-领域', '课程录音'),
+    path.resolve(root, '..', '..', '..', '03-领域', '课程录音'),
+  ]
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate
+  }
+  return path.resolve(root, '..', 'sudo-yf.github.io', 'blog', '03-领域', '课程录音')
+}
+
+function discoverExamRoot() {
+  const candidates = [
+    '/Users/a123/sudo-yf.github.io/blog/00-总览/考试 DDL数据',
+    path.resolve(root, '..', 'sudo-yf.github.io', 'blog', '00-总览', '考试 DDL数据'),
+    path.resolve(root, '..', '..', '00-总览', '考试 DDL数据'),
+    path.resolve(root, '..', '..', '..', '00-总览', '考试 DDL数据'),
+  ]
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate
+  }
+  return path.resolve(root, '..', 'sudo-yf.github.io', 'blog', '00-总览', '考试 DDL数据')
+}
+
+function readExamSchedule() {
+  const schedule = new Map()
+  if (!fs.existsSync(examRoot)) return schedule
+
+  const examFiles = [
+    { slug: 'ranbao', fileName: '04-燃烧与爆炸理论.md' },
+    { slug: 'huhuan', fileName: '07-互换性与技术测量.md' },
+    { slug: 'rechuan', fileName: '03-工程热力学与传热学基础.md' },
+    { slug: 'fagui', fileName: '05-安全应急法规与标准.md' },
+    { slug: 'anhua', fileName: '06-安全工程化学基础.md' },
+    { slug: 'gongcai', fileName: '02-工程材料及金属工艺学.md' },
+    { slug: 'dawu', fileName: '01-大学物理Ⅲ(一).md' },
+  ]
+
+  for (const { slug, fileName } of examFiles) {
+    const filePath = path.join(examRoot, fileName)
+    if (!fs.existsSync(filePath)) continue
+    const raw = fs.readFileSync(filePath, 'utf8')
+    const { data } = parseFrontmatter(raw)
+    if (!data.exam_time) continue
+    const start = parseExamDateTime(data.exam_time)
+    if (!start) continue
+    const end = parseExamDateTime(data.exam_end)
+    const credits = data.credits ? Number(data.credits) : null
+    schedule.set(slug, {
+      course: data.course || '',
+      start,
+      end,
+      credits: Number.isFinite(credits) ? credits : null,
+    })
+  }
+
+  return schedule
+}
+
+function parseExamDateTime(value) {
+  if (!value) return null
+  const normalized = String(value).trim()
+  if (!/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}$/.test(normalized)) return null
+  const asDate = new Date(normalized.replace(' ', 'T') + ':00')
+  if (Number.isNaN(asDate.getTime())) return null
+  return asDate
+}
+
+function daysUntil(target) {
+  const now = new Date()
+  const ms = target.getTime() - now.getTime()
+  return Math.ceil(ms / (24 * 60 * 60 * 1000))
+}
+
+function renderDaysUntilLabel(examStart) {
+  const now = new Date()
+  const ms = examStart.getTime() - now.getTime()
+  if (ms < 0) return `已考试`
+  const days = ms / (24 * 60 * 60 * 1000)
+  const rounded = Math.round(days * 10) / 10
+  if (rounded === 0) return `今天考试`
+  return `${rounded} 天`
+}
+
+function renderRemainingDaysEnglish(examStart) {
+  if (!examStart) return ''
+  const now = new Date()
+  const ms = examStart.getTime() - now.getTime()
+  if (ms < 0) return 'Done'
+  const days = ms / (24 * 60 * 60 * 1000)
+  const rounded = Math.round(days * 10) / 10
+  return `${rounded} Days`
+}
+
+function formatExamTimeDisplay(examStart, examEnd) {
+  if (!examStart) return '待确认'
+  const month = String(examStart.getMonth() + 1).padStart(2, '0')
+  const day = String(examStart.getDate()).padStart(2, '0')
+  const hour = String(examStart.getHours()).padStart(2, '0')
+  const minute = String(examStart.getMinutes()).padStart(2, '0')
+  const year = examStart.getFullYear()
+  const startLabel = `${year}-${month}-${day} ${hour}:${minute}`
+  if (!examEnd) return startLabel
+  const endHour = String(examEnd.getHours()).padStart(2, '0')
+  const endMinute = String(examEnd.getMinutes()).padStart(2, '0')
+  return `${startLabel}-${endHour}:${endMinute}`
 }
 
 function discoverNotes() {
@@ -81,8 +199,20 @@ function discoverNotes() {
     }
   }
 
+  const summaryNotePath = path.join(sourceRoot, '燃爆', '燃爆复习总纲.md')
+  if (fs.existsSync(summaryNotePath)) {
+    notes.push({
+      subject: '燃爆',
+      subjectDir: path.join(sourceRoot, '燃爆'),
+      mmdd: '9999',
+      mdPath: summaryNotePath,
+      imagesJsonPath: '',
+      summarySlug: 'revi',
+    })
+  }
+
   if (notes.length === 0) {
-    throw new Error(`expected at least one formal *_with_ima.md file in ${sourceRoot}`)
+    throw new Error(`expected *_with_ima.md files, found 0 under ${sourceRoot}`)
   }
 
   return notes.sort((a, b) => {
@@ -92,28 +222,38 @@ function discoverNotes() {
   })
 }
 
-function buildPage(note, examData) {
+function buildPage(note) {
   const raw = fs.readFileSync(note.mdPath, 'utf8')
   const { data, body } = parseFrontmatter(raw)
   const info = subjectInfo[note.subject]
-  const exam = examData.get(info.title) || null
-  const date = normalizeDate(data.date, note.mmdd)
-  const dateLabel = date || mmddLabel(note.mmdd)
+  const summaryMode = note.mmdd === '9999'
+  const date = summaryMode ? '' : normalizeDate(data.date, note.mmdd)
+  const dateLabel = summaryMode ? '复习总纲' : date || mmddLabel(note.mmdd)
   const title = `${info.title} ${dateLabel} 课堂笔记`
   const description = `${info.title} ${dateLabel} with_ima 课堂笔记，包含正文和可公开访问的课件图片。`
-  const pagePath = `/courses/${info.slug}/${date || note.mmdd}/`
+  const pagePath = summaryMode
+    ? `/courses/${info.slug}/review-outline/`
+    : `/courses/${info.slug}/${date || note.mmdd}/`
   const pageUrl = absoluteUrl(pagePath)
   const markdownUrl = absoluteUrl(`${pagePath}index.md`)
   const clearUrl = absoluteUrl(`${pagePath}clear.md`)
-  const imageMeta = readImageMeta(note.imagesJsonPath)
+  const imageMeta = summaryMode ? [] : readImageMeta(note.imagesJsonPath)
   const imageMap = new Map(
     imageMeta.map((image) => [normalizeRelativePath(image.relative_path), image]),
   )
   const { markdown, images } = rewriteMarkdownImages(body, note, info, date, imageMap)
-  const clear = readClearSource(note)
+  const clear = summaryMode ? emptyClearSource() : readClearSource(note)
   const topic = extractFirstHeading(markdown)
-  const htmlBody = renderMarkdownToHtml(markdown)
-  const outputDir = path.join(coursesRoot, info.slug, date || note.mmdd)
+  const rendered = renderMarkdown(markdown, { tocLevels: [2, 3, 4] })
+  const htmlBody = rendered.html
+  const toc = rendered.toc
+  const noteNav = '__NOTE_NAV__'
+  renderFigure.loadingIndex = 0
+  const outputDir = path.join(
+    coursesRoot,
+    info.slug,
+    summaryMode ? 'review-outline' : date || note.mmdd,
+  )
 
   ensureDir(outputDir)
   fs.writeFileSync(
@@ -122,12 +262,15 @@ function buildPage(note, examData) {
       title,
       description,
       subject: info.title,
+      subjectSlug: info.slug,
       date,
       pageUrl,
       markdownUrl,
       clearUrl,
       images,
       clear,
+      toc,
+      noteNav,
       body: htmlBody,
     }),
   )
@@ -161,8 +304,7 @@ function buildPage(note, examData) {
     subject: note.subject,
     subjectTitle: info.title,
     subjectSlug: info.slug,
-    exam,
-    mmdd: note.mmdd,
+    mmdd: summaryMode ? 'review-outline' : note.mmdd,
     date,
     title,
     description,
@@ -177,32 +319,22 @@ function buildPage(note, examData) {
   }
 }
 
-function readExamData() {
-  const exams = new Map()
-  if (!fs.existsSync(examDataRoot)) return exams
-
-  for (const fileName of fs.readdirSync(examDataRoot).sort(localeSort)) {
-    if (!fileName.endsWith('.md')) continue
-    const filePath = path.join(examDataRoot, fileName)
-    if (!fs.statSync(filePath).isFile()) continue
-
-    const { data } = parseFrontmatter(fs.readFileSync(filePath, 'utf8'))
-    if (!data.course) continue
-    exams.set(data.course, {
-      course: data.course,
-      credits: data.credits || '',
-      examTime: data.exam_time || '',
-      examEnd: data.exam_end || '',
-    })
+function emptyClearSource() {
+  return {
+    available: false,
+    sourcePath: '',
+    sourceLabel: '',
+    markdown: '',
+    html: '',
+    toc: [],
   }
-
-  return exams
 }
 
 function readClearSource(note) {
   const candidates = [
     path.join(note.subjectDir, `${note.mmdd}-clear.md`),
     path.join(note.subjectDir, `${note.mmdd}-manual-cleaned.md`),
+    path.join(note.subjectDir, `${note.mmdd}-note.clean.md`),
   ]
   const sourcePath = candidates.find((candidate) => fs.existsSync(candidate))
   if (!sourcePath) {
@@ -212,18 +344,21 @@ function readClearSource(note) {
       sourceLabel: '',
       markdown: '',
       html: '',
+      toc: [],
     }
   }
 
   const raw = fs.readFileSync(sourcePath, 'utf8')
   const { body } = parseFrontmatter(raw)
   const markdown = body.trim()
+  const rendered = renderMarkdown(markdown, { indent: '        ', tocLevels: [2, 3, 4] })
   return {
     available: true,
     sourcePath: path.relative(root, sourcePath),
     sourceLabel: path.basename(sourcePath),
     markdown,
-    html: renderMarkdownToHtml(markdown, { indent: '        ' }),
+    html: rendered.html,
+    toc: rendered.toc,
   }
 }
 
@@ -233,7 +368,16 @@ function rewriteMarkdownImages(markdown, note, info, date, imageMap) {
   const dateSegment = date || note.mmdd
 
   const rewritten = markdown.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
-    if (/^https?:\/\//i.test(src)) return match
+    if (/^https?:\/\//i.test(src)) {
+      const cleanAlt = alt.trim()
+      images.push({
+        alt: cleanAlt || `${info.title} ${date || note.mmdd}`,
+        url: src,
+        slideNo: extractSlideNo(cleanAlt),
+        caption: cleanAlt,
+      })
+      return match
+    }
 
     const normalizedSrc = normalizeRelativePath(src)
     const sourcePath = path.resolve(note.subjectDir, normalizedSrc)
@@ -242,12 +386,18 @@ function rewriteMarkdownImages(markdown, note, info, date, imageMap) {
     }
 
     const fileName = path.basename(normalizedSrc)
-    const destRelPath = `/course-assets/${info.slug}/${dateSegment}/${fileName}`
+    const isConvertible = /\.(png|jpe?g)$/i.test(sourcePath)
+    const destFileName = isConvertible ? fileName.replace(/\.(png|jpe?g)$/i, '.jpg') : fileName
+    const destRelPath = `/course-assets/${info.slug}/${dateSegment}/${destFileName}`
     const destPath = path.join(publicRoot, destRelPath)
     ensureDir(path.dirname(destPath))
 
     if (!copied.has(destPath)) {
-      fs.copyFileSync(sourcePath, destPath)
+      if (isConvertible) {
+        convertToJpg(sourcePath, destPath)
+      } else {
+        fs.copyFileSync(sourcePath, destPath)
+      }
       copied.set(destPath, true)
     }
 
@@ -274,16 +424,33 @@ function rewriteMarkdownImages(markdown, note, info, date, imageMap) {
   return { markdown: rewritten, images }
 }
 
+function convertToJpg(sourcePath, destPath) {
+  try {
+    const result = spawnSync(
+      'sips',
+      ['-s', 'format', 'jpeg', sourcePath, '--out', destPath],
+      { stdio: 'ignore' },
+    )
+    if (result.status !== 0 && fs.existsSync(destPath)) {
+      fs.rmSync(destPath, { force: true })
+    }
+  } catch (_) {
+    // Fall back to the original image when sips is unavailable or fails.
+  }
+}
+
 function renderHtmlPage({
   title,
   description,
   subject,
   date,
+  subjectSlug,
   pageUrl,
   markdownUrl,
   clearUrl,
   images,
   clear,
+  noteNav,
   body,
 }) {
   const imageUrls = images.slice(0, 12).map((image) => image.url)
@@ -304,6 +471,7 @@ function renderHtmlPage({
     inLanguage: 'zh-CN',
     url: pageUrl,
   }
+  const tocScript = ''
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -321,31 +489,91 @@ function renderHtmlPage({
 <body class="note-page">
   ${siteHeader()}
   <main class="shell note-shell">
-    <aside class="note-rail">
-      <nav class="crumbs"><a href="${absoluteUrl('/courses/')}">课程</a><span>/</span><span>${escapeHtml(subject)}</span></nav>
-      <p class="rail-label">科目</p>
-      <p class="rail-value">${escapeHtml(subject)}</p>
-      ${date ? `<p class="rail-label">日期</p><time class="rail-value" datetime="${date}">${date}</time>` : ''}
-      <p class="rail-label">图片</p>
-      <p class="rail-value">${images.length} 张</p>
-      <p class="rail-label">Clear</p>
-      <p class="rail-value">${clear.available ? '可查看' : '暂无'}</p>
-      <p class="resource-links"><a href="${markdownUrl}">Markdown</a>${clear.available ? `<a href="${clearUrl}">Clear</a>` : ''}<a href="${absoluteUrl('/llms-full.txt')}">LLM</a></p>
-    </aside>
+    <aside class="note-rail" id="note-rail">${noteNav}</aside>
     <article class="note">
       <header class="note-header">
         <p class="eyebrow">${escapeHtml(subject)}</p>
         <h1>${escapeHtml(title)}</h1>
         <p>${escapeHtml(description)}</p>
+        <button class="rail-toggle" type="button" data-rail-toggle aria-controls="note-rail" aria-expanded="true">收起左栏</button>
       </header>
       ${renderClearPanel(clear)}
 ${body}
     </article>
   </main>
-  ${realtimeExamScript()}
+  ${tocScript}
+  ${noteRailToggleScript()}
+  ${noteLastReadScript(pageUrl, subjectSlug)}
 </body>
 </html>
 `
+}
+
+function noteRailToggleScript() {
+  return `<script>
+(() => {
+  try {
+    const page = document.body;
+    const rail = document.getElementById('note-rail');
+    const button = document.querySelector('[data-rail-toggle]');
+    if (!rail || !button) return;
+    const key = 'course:note-rail-collapsed';
+    const apply = (collapsed) => {
+      page.classList.toggle('note-rail-collapsed', collapsed);
+      button.setAttribute('aria-expanded', String(!collapsed));
+      button.textContent = collapsed ? '展开左栏' : '收起左栏';
+      localStorage.setItem(key, collapsed ? '1' : '0');
+    };
+    apply(localStorage.getItem(key) === '1');
+    button.addEventListener('click', () => {
+      apply(!page.classList.contains('note-rail-collapsed'));
+    });
+  } catch (_) {}
+})();
+</script>`
+}
+
+function noteLastReadScript(pageUrl, subjectSlug) {
+  return `<script>
+(() => {
+  try {
+    const slug = ${JSON.stringify(subjectSlug || '')};
+    const url = ${JSON.stringify(pageUrl || '')};
+    if (!slug || !url) return;
+    localStorage.setItem('course:last_read:' + slug, url);
+  } catch (_) {}
+})();
+</script>`
+}
+
+function buildNoteNavByPageUrl(bySubjectSlug) {
+  const map = new Map()
+  for (const [subjectSlug, pages] of Object.entries(bySubjectSlug)) {
+    const sorted = pages.slice().sort((a, b) => (a.date || a.mmdd).localeCompare(b.date || b.mmdd))
+    for (const page of sorted) {
+      map.set(page.pageUrl, renderNoteNav({ subjectSlug, pages: sorted, current: page }))
+    }
+  }
+  return map
+}
+
+function renderNoteNav({ subjectSlug, pages, current }) {
+  const items = pages
+    .map((page, index) => {
+      const active = page.pageUrl === current.pageUrl ? ' note-item-active' : ''
+      const label = page.date || page.mmdd
+      return `<article class="archive-item note-item${active}">
+  <span class="archive-number">${String(index + 1).padStart(2, '0')}</span>
+  <div>
+    <a class="archive-title" href="${page.pageUrl}">${escapeHtml(label)}</a>
+  </div>
+</article>`
+    })
+    .join('\n')
+
+  return `<section class="archive-list note-list note-switcher" aria-label="笔记切换">
+${items}
+</section>`
 }
 
 function renderMarkdownPage({ title, description, subject, date, sourcePath, clearSourcePath, body }) {
@@ -411,14 +639,14 @@ ${clear.html}
       </details>`
 }
 
-function writeIndexes(pages) {
+function writeIndexes(pages, examBySubjectSlug) {
   const bySubject = groupBy(pages, (page) => page.subjectSlug)
 
   writeIndexPage({
     dir: coursesRoot,
-    title: '课程录音笔记',
-    description: '按课程整理的课堂笔记、课件图和 Markdown 源文件。',
-    body: renderSubjectCards(bySubject),
+    title: '',
+    description: '',
+    body: renderHome({ bySubject, examBySubjectSlug }),
   })
 
   fs.writeFileSync(
@@ -436,30 +664,152 @@ function writeIndexes(pages) {
     ].join('\n'),
   )
 
+  // Subject index pages are intentionally lightweight: redirect to last-read note (or latest note).
   for (const [subjectSlug, subjectPages] of Object.entries(bySubject)) {
-    const first = subjectPages[0]
-    const dir = path.join(coursesRoot, subjectSlug)
-    writeIndexPage({
-      dir,
-      title: first.subjectTitle,
-      description: `${first.subjectTitle} with_ima 课堂笔记索引。`,
-      body: renderPageCards(subjectPages),
-    })
+    const subjectDir = path.join(coursesRoot, subjectSlug)
+    ensureDir(subjectDir)
+    const fallback = getFallbackNoteUrl(bySubject, subjectSlug)
+    const title = subjectPages[0]?.subjectTitle || subjectSlug
     fs.writeFileSync(
-      path.join(dir, 'index.md'),
-      [
-        `# ${first.subjectTitle}`,
-        '',
-        `${first.subjectTitle} with_ima 课堂笔记索引。`,
-        '',
-        ...subjectPages.map(
-          (page) =>
-            `- [${page.title}](${page.pageUrl}) | [Markdown](${page.markdownUrl}) | images: ${page.imageCount}`,
-        ),
-        '',
-      ].join('\n'),
+      path.join(subjectDir, 'index.html'),
+      `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)}</title>
+  <meta http-equiv="refresh" content="0; url=${escapeHtml(fallback)}">
+  <style>${courseCss()}</style>
+</head>
+<body class="index-page">
+  ${siteHeader()}
+  <main class="shell">
+    <p class="toc-empty">Redirecting…</p>
+  </main>
+  <script>
+  (() => {
+    try {
+      const slug = ${JSON.stringify(subjectSlug)};
+      const fallback = ${JSON.stringify(fallback)};
+      const last = localStorage.getItem('course:last_read:' + slug);
+      location.replace(last || fallback);
+    } catch (_) {}
+  })();
+  </script>
+</body>
+</html>
+`,
     )
   }
+}
+
+function renderHome({ bySubject, examBySubjectSlug }) {
+  const homeScript = `${homeCountdownScript()}\n${homeLastReadScript()}`
+  return `<div class="home-layout">
+  <section class="home-left" aria-label="考试倒计时">
+    ${renderExamTable(examBySubjectSlug, bySubject)}
+  </section>
+  <section class="home-right" aria-label="课程列表">
+    ${renderCourseList(bySubject, examBySubjectSlug)}
+  </section>
+</div>
+${homeScript}`
+}
+
+function renderExamTable(examBySubjectSlug, bySubject) {
+  const rows = Array.from(examBySubjectSlug.entries())
+    .map(([subjectSlug, exam]) => {
+      const subjectTitle = bySubject?.[subjectSlug]?.[0]?.subjectTitle || exam.course || subjectSlug
+      const remainingLabel = exam.start ? renderDaysUntilLabel(exam.start) : '待确认'
+      const examTimeLabel = exam.start ? formatExamTimeDisplay(exam.start, exam.end) : '待确认'
+      return {
+        subjectSlug,
+        subjectTitle,
+        credits: exam.credits ?? null,
+        remainingDays: exam.start ? (exam.start.getTime() - Date.now()) / (24 * 60 * 60 * 1000) : Infinity,
+        examTimeLabel,
+        remainingLabel,
+        start: exam.start,
+      }
+    })
+    .sort((a, b) => {
+      if (a.remainingDays !== b.remainingDays) return a.remainingDays - b.remainingDays
+      const aCredits = a.credits ?? -Infinity
+      const bCredits = b.credits ?? -Infinity
+      return bCredits - aCredits
+    })
+
+  return `<section class="exam-table" aria-label="考试倒计时">
+  <table>
+    <thead>
+      <tr><th>课程</th><th>学分</th><th>考试时间</th><th>剩余天数</th></tr>
+    </thead>
+    <tbody>
+${rows
+  .map((row) => {
+    const datetime = row.start ? row.start.toISOString() : ''
+    const fallback = getFallbackNoteUrl(bySubject, row.subjectSlug)
+    const countdownAttrs = row.start ? renderCountdownAttrs(row.start, 'zh') : ''
+    return `<tr>
+  <td><a class="home-subject-link" data-subject-slug="${escapeHtml(row.subjectSlug)}" data-fallback-href="${escapeHtml(fallback)}" href="${escapeHtml(fallback)}">${escapeHtml(row.subjectTitle)}</a></td>
+  <td>${row.credits ?? ''}</td>
+  <td>${row.examTimeLabel === '待确认' ? '待确认' : `<time datetime="${escapeHtml(datetime)}">${escapeHtml(row.examTimeLabel)}</time>`}</td>
+  <td class="exam-days"${countdownAttrs}>${escapeHtml(row.remainingLabel)}</td>
+</tr>`
+  })
+  .join('\n')}
+    </tbody>
+  </table>
+</section>`
+}
+
+function renderCourseList(bySubject, examBySubjectSlug) {
+  const subjects = Object.entries(bySubject).map(([subjectSlug, subjectPages]) => {
+    const exam = examBySubjectSlug.get(subjectSlug)
+    const examStart = exam?.start || null
+    const daysToExam = examStart ? (examStart.getTime() - Date.now()) / (24 * 60 * 60 * 1000) : null
+    return { subjectSlug, subjectPages, examStart, daysToExam }
+  })
+  subjects.sort((a, b) => {
+    const aDays = a.daysToExam
+    const bDays = b.daysToExam
+    if (aDays == null && bDays == null) return localeSort(a.subjectSlug, b.subjectSlug)
+    if (aDays == null) return 1
+    if (bDays == null) return -1
+    return aDays - bDays
+  })
+
+  return `<section class="archive-list" aria-label="课程列表">
+${subjects
+  .map((entry, index) => {
+    const { subjectSlug, subjectPages, examStart } = entry
+    const first = subjectPages[0]
+    const fallback = getFallbackNoteUrl(bySubject, subjectSlug)
+    const remaining = examStart
+      ? `<span${renderCountdownAttrs(examStart, 'en')}>${escapeHtml(renderRemainingDaysEnglish(examStart))}</span>`
+      : ''
+    const exam = examBySubjectSlug.get(subjectSlug)
+    const examTime = exam?.start ? formatExamTimeDisplay(exam.start, exam.end).replace(/^\d{4}-/, '') : ''
+    const credits = exam?.credits != null ? `${exam.credits} 学分` : ''
+    const classes = `${subjectPages.length} class`
+    const parts = [
+      remaining,
+      examTime ? escapeHtml(examTime) : '',
+      credits ? escapeHtml(credits) : '',
+      escapeHtml(classes),
+    ].filter(Boolean)
+    const meta = parts.join(' / ')
+    return `<article class="archive-item subject-card">
+  <span class="archive-number">${String(index + 1).padStart(2, '0')}</span>
+  <div>
+    <a class="archive-title home-subject-link" data-subject-slug="${escapeHtml(subjectSlug)}" data-fallback-href="${escapeHtml(fallback)}" href="${escapeHtml(fallback)}">${escapeHtml(first.subjectTitle)}</a>
+    <p class="subject-meta">${meta}</p>
+  </div>
+  <span class="archive-code">${escapeHtml(subjectSlug)}</span>
+</article>`
+  })
+  .join('\n')}
+</section>`
 }
 
 function writeIndexPage({ dir, title, description, body }) {
@@ -481,21 +831,9 @@ function writeIndexPage({ dir, title, description, body }) {
 </head>
 <body class="index-page">
   ${siteHeader()}
-  <main class="shell index-shell">
-    <aside class="hero-panel">
-      <p class="eyebrow">Course archive</p>
-      <h1>${escapeHtml(title)}</h1>
-      <p>${escapeHtml(description)}</p>
-      <p class="resource-links"><a href="${absoluteUrl('/courses/index.md')}">Markdown</a><a href="${absoluteUrl('/llms-full.txt')}">LLM</a></p>
-    </aside>
-    <section class="index">
-      <header class="index-header">
-        <p>${escapeHtml(description)}</p>
-      </header>
-${body}
-    </section>
+  <main class="shell">
+    ${body}
   </main>
-  ${realtimeExamScript()}
 </body>
 </html>
 `,
@@ -513,30 +851,6 @@ function siteHeader() {
 </header>`
 }
 
-function realtimeExamScript() {
-  return `<script>
-(() => {
-  const dayMs = 24 * 60 * 60 * 1000
-  const formatDays = (value) => {
-    if (!Number.isFinite(value)) return '-- Days'
-    const safeValue = Math.max(0, value)
-    return safeValue.toFixed(1).replace(/\\.0$/, '') + ' Days'
-  }
-  const update = () => {
-    const now = Date.now()
-    document.querySelectorAll('[data-exam-time]').forEach((node) => {
-      const target = Date.parse(node.dataset.examTime || '')
-      const output = node.querySelector('[data-remaining-days]')
-      if (!output) return
-      output.textContent = formatDays((target - now) / dayMs)
-    })
-  }
-  update()
-  window.setInterval(update, 60 * 1000)
-})()
-</script>`
-}
-
 function mathAssets() {
   return `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css">`
 }
@@ -548,7 +862,7 @@ function siteMeta({ title, description, url, type }) {
   <link rel="icon" type="image/svg+xml" href="${absoluteUrl('/favicon.svg')}">
   <link rel="apple-touch-icon" href="${absoluteUrl('/apple-touch-icon.png')}">
   <link rel="manifest" href="${absoluteUrl('/site.webmanifest')}">
-  <meta name="theme-color" content="#080806">
+  <meta name="theme-color" content="#f7f3ea">
   <meta property="og:type" content="${escapeHtml(type)}">
   <meta property="og:title" content="${escapeHtml(title)}">
   <meta property="og:description" content="${escapeHtml(description)}">
@@ -561,38 +875,77 @@ function siteMeta({ title, description, url, type }) {
 `
 }
 
-function renderSubjectCards(bySubject) {
-  const subjects = Object.entries(bySubject)
-  const totalNotes = subjects.reduce((sum, [, pages]) => sum + pages.length, 0)
-  const totalImages = subjects.reduce(
-    (sum, [, pages]) => sum + pages.reduce((inner, page) => inner + page.imageCount, 0),
-    0,
-  )
-  return `<section class="summary-line" aria-label="课程统计">
-  <span><strong>${subjects.length}</strong> 门课程</span>
-  <span><strong>${totalNotes}</strong> 次课</span>
-  <span><strong>${totalImages}</strong> 张图</span>
-</section>
-<section class="archive-list" aria-label="课程列表">
-${subjects
-  .map(([subjectSlug, subjectPages], index) => {
-    const first = subjectPages[0]
-    const imageCount = subjectPages.reduce((sum, page) => sum + page.imageCount, 0)
-    const completeCount = subjectPages.filter((page) => page.imageCount > 0).length
-    return `<article class="archive-item subject-card">
-  <span class="archive-number">${String(index + 1).padStart(2, '0')}</span>
-  <div>
-    <a class="archive-title" href="${absoluteUrl(`/courses/${subjectSlug}/`)}">${escapeHtml(first.subjectTitle)}</a>
-    ${first.exam ? renderExamLine(first.exam, subjectPages.length) : ''}
-  </div>
-  <span class="archive-code">${escapeHtml(subjectSlug)}</span>
-</article>`
-  })
-  .join('\n')}
-</section>`
+function getFallbackNoteUrl(bySubject, subjectSlug) {
+  const pages = bySubject?.[subjectSlug] || []
+  if (!pages.length) return absoluteUrl('/courses/')
+  const sorted = pages.slice().sort((a, b) => (a.date || a.mmdd).localeCompare(b.date || b.mmdd))
+  return sorted[sorted.length - 1].pageUrl
 }
 
-function renderPageCards(pages) {
+function renderCountdownAttrs(examStart, format) {
+  return ` data-countdown data-countdown-format="${escapeHtml(format)}" data-exam-start="${escapeHtml(examStart.toISOString())}"`
+}
+
+function homeCountdownScript() {
+  return `<script>
+(() => {
+  const targets = Array.from(document.querySelectorAll('[data-countdown][data-exam-start]'));
+  if (!targets.length) return;
+
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const formatCountdown = (date, mode) => {
+    const ms = date.getTime() - Date.now();
+    if (mode === 'en') {
+      if (ms < 0) return 'Done';
+      return (Math.round((ms / msPerDay) * 10) / 10) + ' Days';
+    }
+    if (ms < 0) return '已考试';
+    const days = Math.round((ms / msPerDay) * 10) / 10;
+    if (days === 0) return '今天考试';
+    return days + ' 天';
+  };
+
+  const update = () => {
+    for (const target of targets) {
+      const date = new Date(target.getAttribute('data-exam-start'));
+      if (Number.isNaN(date.getTime())) continue;
+      target.textContent = formatCountdown(date, target.getAttribute('data-countdown-format') || 'zh');
+    }
+  };
+
+  update();
+  window.setInterval(update, 30 * 1000);
+})();
+</script>`
+}
+
+function homeLastReadScript() {
+  return `<script>
+(() => {
+  const links = Array.from(document.querySelectorAll('.home-subject-link[data-subject-slug]'));
+  if (!links.length) return;
+  const keyFor = (slug) => 'course:last_read:' + slug;
+  for (const link of links) {
+    link.addEventListener('click', (event) => {
+      const slug = link.getAttribute('data-subject-slug');
+      const fallback = link.getAttribute('data-fallback-href') || link.getAttribute('href');
+      if (!slug) return;
+      const last = localStorage.getItem(keyFor(slug));
+      const target = last || fallback;
+      if (!target) return;
+      event.preventDefault();
+      location.href = target;
+    });
+  }
+})();
+</script>`
+}
+
+function renderSubjectCards(bySubject, examBySubjectSlug) {
+  return renderCourseList(bySubject, examBySubjectSlug)
+}
+
+function renderPageCards(pages, examInfo) {
   const imageTotal = pages.reduce((sum, page) => sum + page.imageCount, 0)
   const imagePages = pages.filter((page) => page.imageCount > 0).length
   return `<section class="summary-line" aria-label="课次统计">
@@ -615,32 +968,6 @@ ${pages
   })
   .join('\n')}
 </section>`
-}
-
-function renderExamLine(exam, classCount) {
-  const examTimeIso = toBrowserDateTime(exam.examTime)
-  const examEndIso = toBrowserDateTime(exam.examEnd)
-  const timeLabel = formatExamTimeLabel(exam.examTime, exam.examEnd)
-  const credits = formatCredits(exam.credits)
-  return `<p class="exam-time" data-exam-time="${escapeHtml(examTimeIso)}"><span data-remaining-days>-- Days</span> / ${escapeHtml(timeLabel)} / ${escapeHtml(credits)} / ${classCount} class</p>`
-}
-
-function toBrowserDateTime(value) {
-  if (!value) return ''
-  return value.replace(' ', 'T') + ':00+08:00'
-}
-
-function formatExamTimeLabel(start, end) {
-  if (!start) return '待确认'
-  const date = start.slice(5, 10)
-  const startTime = start.slice(11, 16)
-  const endTime = end ? end.slice(11, 16) : ''
-  return endTime ? `${date} ${startTime}-${endTime}` : `${date} ${startTime}`
-}
-
-function formatCredits(value) {
-  if (!value) return '学分待确认'
-  return `${Number(value).toString()} 学分`
 }
 
 function extractFirstHeading(markdown) {
@@ -669,7 +996,8 @@ function writeLlmsFiles(pages) {
       '## Subjects',
       ...Object.entries(bySubject).map(([subjectSlug, subjectPages]) => {
         const first = subjectPages[0]
-        return `- ${first.subjectTitle}: ${absoluteUrl(`/courses/${subjectSlug}/`)}`
+        const fallback = getFallbackNoteUrl(bySubject, subjectSlug)
+        return `- ${first.subjectTitle}: ${fallback}`
       }),
       '',
     ].join('\n'),
@@ -694,7 +1022,6 @@ function writeLlmsFiles(pages) {
 function writeCourseSitemap(pages) {
   const urls = [
     absoluteUrl('/courses/'),
-    ...unique(pages.map((page) => absoluteUrl(`/courses/${page.subjectSlug}/`))),
     ...pages.map((page) => page.pageUrl),
     ...pages.map((page) => page.markdownUrl),
   ]
@@ -716,9 +1043,16 @@ ${urls
 }
 
 function renderMarkdownToHtml(markdown, options = {}) {
+  return renderMarkdown(markdown, options).html
+}
+
+function renderMarkdown(markdown, options = {}) {
   const indent = options.indent || '      '
+  const includeTocLevels = options.tocLevels || [2, 3]
   const lines = markdown.split(/\r?\n/)
   const html = []
+  const toc = []
+  const slugCounts = new Map()
   let paragraph = []
   let listType = null
   let blockquote = []
@@ -792,7 +1126,15 @@ function renderMarkdownToHtml(markdown, options = {}) {
       flushList()
       flushBlockquote()
       const level = Math.min(6, heading[1].length + 1)
-      html.push(`<h${level}>${renderInline(heading[2].trim())}</h${level}>`)
+      const rawText = heading[2].trim()
+      const plainText = stripInlineMarkup(rawText)
+      const id = uniqueSlug(slugifyHeading(plainText), slugCounts)
+      html.push(
+        `<h${level} id="${escapeHtml(id)}" data-heading-level="${level}">${renderInline(rawText)}</h${level}>`,
+      )
+      if (includeTocLevels.includes(level)) {
+        toc.push({ level, id, text: plainText })
+      }
       continue
     }
 
@@ -836,15 +1178,18 @@ function renderMarkdownToHtml(markdown, options = {}) {
   flushBlockquote()
   if (inCode) flushCode()
 
-  return html.map((line) => `${indent}${line}`).join('\n')
+  return { html: html.map((line) => `${indent}${line}`).join('\n'), toc }
 }
 
 function renderFigure(src, alt) {
+  const loading = renderFigure.loadingIndex++ === 0 ? 'eager' : 'lazy'
   return `<figure>
-  <img src="${escapeHtml(src)}" alt="${escapeHtml(alt)}" loading="lazy">
+  <img src="${escapeHtml(src)}" alt="${escapeHtml(alt)}" loading="${loading}" decoding="async" fetchpriority="${loading === 'eager' ? 'high' : 'auto'}">
   <figcaption>${escapeHtml(alt)}</figcaption>
 </figure>`
 }
+
+renderFigure.loadingIndex = 0
 
 function renderInline(text) {
   const tokens = tokenizeInline(text)
@@ -905,6 +1250,93 @@ function matchMathToken(text, start) {
   }
 
   return null
+}
+
+function stripInlineMarkup(text) {
+  return text
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function slugifyHeading(text) {
+  const base = String(text)
+    .toLowerCase()
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/[^\p{L}\p{N}\s-]+/gu, '')
+    .trim()
+    .replace(/\s+/g, '-')
+  return base || 'section'
+}
+
+function uniqueSlug(base, counts) {
+  const current = counts.get(base) || 0
+  counts.set(base, current + 1)
+  if (current === 0) return base
+  return `${base}-${current + 1}`
+}
+
+function renderToc(toc) {
+  if (!toc || !toc.length) {
+    return `<nav class="toc" aria-label="目录">
+  <p class="toc-title">目录</p>
+  <p class="toc-empty">无目录</p>
+</nav>`
+  }
+
+  return `<nav class="toc" aria-label="目录">
+  <p class="toc-title">目录</p>
+  <ol class="toc-list">
+${toc
+  .map(
+    (item) =>
+      `    <li class="toc-item toc-level-${item.level}"><a href="#${escapeHtml(item.id)}" data-toc-link="${escapeHtml(item.id)}">${escapeHtml(item.text)}</a></li>`,
+  )
+  .join('\n')}
+  </ol>
+</nav>`
+}
+
+function tocScrollSpyScript() {
+  return `<script>
+(() => {
+  const links = Array.from(document.querySelectorAll('[data-toc-link]'));
+  if (!links.length) return;
+
+  const sections = links
+    .map((link) => document.getElementById(link.getAttribute('data-toc-link')))
+    .filter(Boolean);
+  if (!sections.length) return;
+
+  const linkById = new Map(links.map((link) => [link.getAttribute('data-toc-link'), link]));
+  let activeId = null;
+
+  const setActive = (id) => {
+    if (!id || id === activeId) return;
+    activeId = id;
+    for (const link of links) link.classList.toggle('is-active', link.getAttribute('data-toc-link') === id);
+  };
+
+  const observer = new IntersectionObserver(
+    (entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+      if (visible.length) setActive(visible[0].target.id);
+    },
+    { rootMargin: '-30% 0px -60% 0px', threshold: [0, 1] },
+  );
+
+  for (const section of sections) observer.observe(section);
+
+  const initial = location.hash ? location.hash.slice(1) : sections[0].id;
+  setActive(initial);
+})();
+</script>`
 }
 
 function findNextInlineSpecial(text, from) {
@@ -982,18 +1414,55 @@ function calloutTitle(kind) {
 
 function renderSimpleBlocks(lines) {
   const blocks = []
-  let current = []
-  for (const line of lines) {
+  let paragraph = []
+  let listType = null // 'ul' | 'ol' | null
+  let listItems = []
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return
+    blocks.push(`<p>${renderInline(paragraph.join(' '))}</p>`)
+    paragraph = []
+  }
+
+  const flushList = () => {
+    if (!listType || !listItems.length) {
+      listType = null
+      listItems = []
+      return
+    }
+    blocks.push(
+      `<${listType}>${listItems.map((item) => `<li>${renderInline(item)}</li>`).join('')}</${listType}>`,
+    )
+    listType = null
+    listItems = []
+  }
+
+  for (const rawLine of lines) {
+    const line = rawLine ?? ''
+
     if (!line.trim()) {
-      if (current.length) {
-        blocks.push(`<p>${renderInline(current.join(' '))}</p>`)
-        current = []
-      }
+      flushParagraph()
+      flushList()
       continue
     }
-    current.push(line.trim())
+
+    const unordered = line.match(/^\s*[-*]\s+(.+)$/)
+    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/)
+    if (unordered || ordered) {
+      flushParagraph()
+      const desired = ordered ? 'ol' : 'ul'
+      if (listType && listType !== desired) flushList()
+      listType = desired
+      listItems.push((unordered || ordered)[1])
+      continue
+    }
+
+    flushList()
+    paragraph.push(line.trim())
   }
-  if (current.length) blocks.push(`<p>${renderInline(current.join(' '))}</p>`)
+
+  flushParagraph()
+  flushList()
   return blocks.join('') || '<p></p>'
 }
 
@@ -1034,7 +1503,7 @@ function mmddLabel(mmdd) {
 function buildAltText({ originalAlt, subjectTitle, date, mmdd, meta }) {
   const slide = meta.slide_no || originalAlt.replace(/^slide\s*/i, '').trim()
   const base = `${subjectTitle} ${date || mmdd} slide ${slide || ''}`.trim()
-  const detail = (meta.reason || meta.selection_text || '').replace(/\s+/g, ' ').trim()
+  const detail = (meta.selection_text || meta.reason || '').replace(/\s+/g, ' ').trim()
   if (!detail) return base
   return `${base}: ${truncate(detail, 90)}`
 }
@@ -1042,8 +1511,17 @@ function buildAltText({ originalAlt, subjectTitle, date, mmdd, meta }) {
 function buildCaption(meta) {
   const parts = []
   if (meta.slide_no) parts.push(`slide ${meta.slide_no}`)
-  if (meta.reason) parts.push(meta.reason)
+  if (meta.selection_text) {
+    parts.push(truncate(meta.selection_text.replace(/\s+/g, ' ').trim(), 120))
+  } else if (meta.reason) {
+    parts.push(truncate(meta.reason.replace(/\s+/g, ' ').trim(), 120))
+  }
   return parts.join(': ')
+}
+
+function extractSlideNo(text) {
+  const match = String(text || '').match(/slide\s*(\d+)/i)
+  return match ? Number(match[1]) : undefined
 }
 
 function truncate(text, maxLength) {
@@ -1102,18 +1580,21 @@ function localeSort(a, b) {
 function courseCss() {
   return `
 :root {
-  color-scheme: dark;
-  --background: #080806;
-  --panel: #10100d;
-  --panel-soft: #16150f;
-  --foreground: #f5f1e7;
-  --muted: #a49d8c;
-  --muted-soft: #766f62;
-  --border: rgba(245, 241, 231, 0.14);
-  --border-strong: rgba(245, 241, 231, 0.28);
-  --accent: #d9b46f;
-  --accent-soft: rgba(217, 180, 111, 0.12);
-  --danger: #d07362;
+  color-scheme: light;
+  --background: #f7f3ea;
+  --panel: #fffdf8;
+  --panel-soft: #f1ebde;
+  --foreground: #20170f;
+  --muted: #6d6252;
+  --muted-soft: #8c7c67;
+  --border: rgba(66, 52, 32, 0.12);
+  --border-strong: rgba(66, 52, 32, 0.22);
+  --accent: #9b6a1f;
+  --accent-soft: rgba(155, 106, 31, 0.1);
+  --danger: #b44d3a;
+  --surface-glass: rgba(255, 252, 246, 0.82);
+  --surface-soft: rgba(255, 250, 242, 0.72);
+  --grid: rgba(81, 63, 39, 0.03);
   --reader: 820px;
   --wide: 1240px;
   --header-height: 68px;
@@ -1129,24 +1610,31 @@ body {
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }
+body.note-page {
+  overflow: hidden;
+}
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(circle at 85% 8%, rgba(217, 180, 111, 0.16), transparent 24rem),
-    radial-gradient(circle at 8% 88%, rgba(114, 86, 44, 0.18), transparent 24rem),
-    linear-gradient(rgba(245, 241, 231, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(245, 241, 231, 0.035) 1px, transparent 1px);
-  background-size: auto, auto, 36px 36px, 36px 36px;
+    radial-gradient(circle at 86% 8%, rgba(213, 171, 103, 0.14), transparent 26rem),
+    radial-gradient(circle at 8% 90%, rgba(177, 135, 72, 0.1), transparent 24rem),
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: auto, auto, 64px 64px, 64px 64px;
+  background-position: 0 0, 0 0, 0 0, 0 0;
 }
 body::after {
   content: "";
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background: linear-gradient(180deg, rgba(8, 8, 6, 0.18), rgba(8, 8, 6, 0.82));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.32), rgba(247, 243, 234, 0.68));
+}
+body.note-page::after {
+  background: transparent;
 }
 .site-header {
   position: fixed;
@@ -1161,7 +1649,7 @@ body::after {
   height: var(--header-height);
   padding: 0 clamp(1rem, 3vw, 2.5rem);
   border-bottom: 1px solid var(--border);
-  background: rgba(8, 8, 6, 0.72);
+  background: var(--surface-glass);
   backdrop-filter: blur(20px);
 }
 .site-title {
@@ -1197,6 +1685,16 @@ body::after {
   margin: 0 auto;
   padding: calc(var(--header-height) + 4.5rem) 0 7rem;
 }
+body.note-page .shell {
+  height: 100svh;
+  padding: var(--header-height) 0 0 !important;
+}
+.home-layout {
+  display: grid;
+  grid-template-columns: minmax(16rem, 25rem) minmax(0, 1fr);
+  gap: clamp(2rem, 5vw, 5rem);
+  align-items: start;
+}
 .index-shell,
 .note-shell {
   display: grid;
@@ -1215,21 +1713,135 @@ body::after {
 .hero-panel,
 .note-rail {
   position: sticky;
-  top: calc(var(--header-height) + 2rem);
+  top: calc(var(--header-height) + 1.35rem);
+  align-self: start;
+  padding: 1.15rem 1.05rem 1.3rem;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  background: rgba(255, 252, 246, 0.86);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 18px 44px rgba(65, 49, 29, 0.08);
 }
 .hero-panel {
   min-height: calc(100svh - var(--header-height) - 7rem);
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  padding-right: 1.5rem;
-  border-right: 1px solid var(--border);
 }
 .note-rail {
   display: grid;
-  gap: 0.2rem;
-  padding-right: 1.5rem;
-  border-right: 1px solid var(--border);
+  gap: 0.35rem;
+  max-height: calc(100svh - var(--header-height) - 2.7rem);
+  overflow: hidden;
+}
+body.note-page .note-shell {
+  height: calc(100svh - var(--header-height));
+  align-items: stretch;
+}
+body.note-page .note-rail,
+body.note-page .note {
+  position: relative;
+  top: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+body.note-page .note-rail {
+  height: calc(100% - 1.25rem);
+  margin-top: 1.25rem;
+}
+body.note-page .note {
+  height: 100%;
+  overflow: auto;
+}
+body.note-page .note {
+  padding-bottom: 1rem;
+}
+body.note-rail-collapsed .note-shell {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+body.note-rail-collapsed .note-rail {
+  width: 0;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+}
+body.note-rail-collapsed .note {
+  width: 100%;
+}
+.rail-toggle {
+  margin-top: 0.85rem;
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--foreground);
+  cursor: pointer;
+}
+.rail-toggle:hover {
+  background: rgba(155, 106, 31, 0.16);
+}
+.rail-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.toc {
+  display: grid;
+  gap: 0.8rem;
+  align-content: start;
+  width: 100%;
+  max-height: calc(100svh - var(--header-height) - 6rem);
+  overflow: auto;
+  padding-right: 0.25rem;
+}
+.toc-title {
+  margin: 0;
+  color: var(--muted-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.toc-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+.toc-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.3rem;
+}
+.toc-item {
+  margin: 0;
+}
+.toc-item a {
+  display: block;
+  padding: 0.25rem 0.4rem;
+  border-left: 2px solid transparent;
+  border-radius: 8px;
+  color: color-mix(in oklab, var(--foreground) 72%, var(--muted));
+  text-decoration: none;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.toc-item a:hover {
+  color: var(--foreground);
+  background: rgba(155, 106, 31, 0.06);
+}
+.toc-item a.is-active {
+  color: var(--foreground);
+  border-left-color: var(--accent);
+  background: rgba(155, 106, 31, 0.12);
+}
+.note-item-active .archive-title {
+  color: var(--accent);
+}
+.toc-level-3 a {
+  padding-left: 0.9rem;
+  font-size: 0.88rem;
 }
 .crumbs,
 .eyebrow,
@@ -1345,7 +1957,7 @@ img {
   width: 100%;
   height: auto;
   border: 1px solid var(--border);
-  background: #f8f5ec;
+  background: #fbf8f2;
 }
 figure {
   margin: 2rem 0 2.6rem;
@@ -1373,6 +1985,14 @@ blockquote {
   font-weight: 700;
 }
 .callout-body p { margin: 0.4rem 0 0; }
+.callout-body ul,
+.callout-body ol {
+  margin: 0.4rem 0 0.2rem;
+  padding-left: 1.25rem;
+}
+.callout-body li {
+  margin: 0.15rem 0;
+}
 .callout-example { --callout-color: #b45309; }
 .callout-warning,
 .callout-danger,
@@ -1386,7 +2006,7 @@ pre {
   overflow-x: auto;
   padding: 1rem;
   border: 1px solid var(--border);
-  background: #11110f;
+  background: var(--panel-soft);
   color: var(--foreground);
 }
 code { font-family: "JetBrains Mono", monospace; }
@@ -1394,7 +2014,7 @@ code { font-family: "JetBrains Mono", monospace; }
   margin: 0 0 2.8rem;
   border-top: 1px solid var(--border-strong);
   border-bottom: 1px solid var(--border);
-  background: linear-gradient(180deg, rgba(245, 241, 231, 0.035), rgba(245, 241, 231, 0.01));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.74), rgba(241, 235, 222, 0.44));
 }
 .clear-panel summary {
   display: flex;
@@ -1504,11 +2124,46 @@ code { font-family: "JetBrains Mono", monospace; }
   margin: 0.55rem 0 0;
   color: var(--muted);
 }
-.archive-item .exam-time {
-  color: var(--accent);
+.subject-meta {
+  margin-top: 0.65rem;
+  color: color-mix(in oklab, var(--foreground) 82%, var(--muted));
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.86rem;
-  letter-spacing: 0.02em;
+  font-size: 0.82rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.base-snippet {
+  margin: 0 0 1.8rem;
+  padding: 1rem 1.15rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-soft);
+}
+.base-snippet pre {
+  margin: 0;
+  overflow: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: color-mix(in oklab, var(--foreground) 84%, var(--muted));
+}
+.base-snippet code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+.exam-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 .archive-number,
 .archive-code {
@@ -1519,19 +2174,60 @@ code { font-family: "JetBrains Mono", monospace; }
 .archive-code {
   text-transform: uppercase;
 }
+.exam-table {
+  margin: 0 0 1.8rem;
+  padding: 1rem 1.15rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-soft);
+}
+.exam-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+}
+.exam-table th,
+.exam-table td {
+  padding: 0.55rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+.exam-table th {
+  color: var(--muted);
+  font-weight: 650;
+  text-transform: uppercase;
+}
+.exam-table td {
+  color: color-mix(in oklab, var(--foreground) 82%, var(--muted));
+}
+.exam-table td a {
+  color: var(--foreground);
+  text-decoration: none;
+}
+.exam-table td a:hover {
+  color: var(--accent);
+}
+.exam-table .exam-days {
+  color: var(--foreground);
+  white-space: nowrap;
+}
 @media (max-width: 900px) {
   .index-shell,
   .note-shell {
+    grid-template-columns: 1fr;
+  }
+  .home-layout {
     grid-template-columns: 1fr;
   }
   .hero-panel,
   .note-rail {
     position: static;
     min-height: 0;
-    padding-right: 0;
-    padding-bottom: 1.8rem;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
+    max-height: none;
+    padding: 1rem;
   }
   h1 {
     max-width: 10ch;
@@ -1575,6 +2271,16 @@ code { font-family: "JetBrains Mono", monospace; }
     grid-template-columns: 2.8rem minmax(0, 1fr);
   }
   .archive-code {
+    display: none;
+  }
+  .note-rail {
+    display: none;
+  }
+  .exam-table {
+    padding: 0.85rem 0.9rem;
+  }
+  .exam-table th:nth-child(2),
+  .exam-table td:nth-child(2) {
     display: none;
   }
 }

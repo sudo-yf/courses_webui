@@ -4,9 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node scripts/build-course-recordings.mjs && node scripts/build-course-domain.mjs",
+    "build": "node scripts/build-knowledge-page.mjs",
+    "build:courses": "node scripts/build-course-recordings.mjs && node scripts/build-course-domain.mjs",
+    "build:courses:stage": "node scripts/build-course-stage-source.mjs && COURSE_SOURCE_ROOT=./tmp/course-source-stage node scripts/build-course-recordings.mjs && node scripts/build-course-domain.mjs",
     "dev": "wrangler dev --local --port 8787",
-    "deploy": "npm run build && wrangler deploy"
+    "deploy": "npm run build && npm run build:courses:stage && npx wrangler --config wrangler.toml deploy"
   },
   "dependencies": {
     "katex": "^0.16.22"

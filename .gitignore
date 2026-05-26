@@ -3,11 +3,13 @@
 .env.*
 node_modules/
 .wrangler/
+tmp/
 
 # Generated build output
 dist-course-site/
 public/courses/
 public/course-assets/
+public/knowledge/
 public/llms.txt
 public/llms-full.txt
 public/course-sitemap.xml

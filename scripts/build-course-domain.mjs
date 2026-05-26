@@ -17,6 +17,9 @@ function main() {
 
   copyTree(path.join(publicRoot, 'courses'), outRoot)
   copyTree(path.join(publicRoot, 'course-assets'), path.join(outRoot, 'course-assets'))
+  if (fs.existsSync(path.join(publicRoot, 'knowledge'))) {
+    copyTree(path.join(publicRoot, 'knowledge'), path.join(outRoot, 'knowledge'))
+  }
 
   for (const fileName of [
     'llms.txt',
