@@ -116,6 +116,15 @@ export function renderMarkdown(markdown, options = {}) {
       continue
     }
 
+    const thematicBreak = line.match(/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/)
+    if (thematicBreak) {
+      flushParagraph()
+      flushList()
+      flushBlockquote()
+      html.push('<hr>')
+      continue
+    }
+
     const heading = line.match(/^(#{1,6})\s+(.+)$/)
     if (heading) {
       flushParagraph()
@@ -331,6 +340,7 @@ body::after{ content:""; position:fixed; inset:0; pointer-events:none; backgroun
 pre{ overflow:auto; padding: .85rem 1rem; border:1px solid var(--border); border-radius: 14px; background: var(--panel-soft); }
 code{ font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; }
 a{ color: var(--accent); }
+hr{ margin:2.4rem 0; border:0; height:1px; background:linear-gradient(90deg, transparent, var(--border-strong), transparent); }
 figure{ margin: 1.2rem 0; border: 1px solid var(--border); border-radius: 16px; overflow:hidden; background: rgba(255,250,242,.72); }
 figure img{ display:block; width:100%; height:auto; }
 figcaption{ padding: .6rem .85rem; color: var(--muted); font-size: .9rem; }

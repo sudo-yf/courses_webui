@@ -153,6 +153,7 @@ async function stageOnlineNote({ slug, date, stageSubject }) {
   const noteUrl = `${courseSiteUrl}/${slug}/${date}/index.md`
   const noteRaw = await fetchText(noteUrl)
   const note = unwrapGeneratedMarkdown(noteRaw, { removeDescription: true })
+  const noteBody = await stageRemoteMarkdownAssets(note.body, stageSubjectDir, stageSubject)
   const subjectValue = note.data.subject || stageSubject
   const frontmatter = [
     '---',
@@ -164,7 +165,7 @@ async function stageOnlineNote({ slug, date, stageSubject }) {
   ].join('\n')
   fs.writeFileSync(
     path.join(stageSubjectDir, `${mmdd}_with_ima.md`),
-    `${frontmatter}${note.body.trim()}\n`,
+    `${frontmatter}${noteBody.trim()}\n`,
   )
 
   const clearUrl = `${courseSiteUrl}/${slug}/${date}/clear.md`
@@ -183,6 +184,66 @@ async function stageOnlineNote({ slug, date, stageSubject }) {
     path.join(stageSubjectDir, `${mmdd}-clear.md`),
     `${clearFrontmatter}${clear.body.trim()}\n`,
   )
+}
+
+async function stageRemoteMarkdownAssets(markdown, stageSubjectDir, stageSubject) {
+  const assetsDir = path.join(stageSubjectDir, 'assets')
+  let rewritten = markdown
+  const matches = [...markdown.matchAll(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g)]
+  for (const match of matches) {
+    const src = match[2]
+    if (!isCourseAssetUrl(src)) continue
+    const remoteFileName = path.basename(new URL(src).pathname)
+    const localSourcePath = resolveLocalAssetPath(stageSubject, remoteFileName)
+    const fileName = localSourcePath ? path.basename(localSourcePath) : remoteFileName
+    const relativePath = `assets/${fileName}`
+    const targetPath = path.join(assetsDir, fileName)
+    ensureDir(assetsDir)
+    if (!fs.existsSync(targetPath)) {
+      try {
+        if (localSourcePath) {
+          fs.copyFileSync(localSourcePath, targetPath)
+        } else {
+          await downloadBinary(src, targetPath)
+        }
+      } catch (error) {
+        console.warn(`[course-stage] asset fallback failed for ${src}: ${error.message}`)
+        const label = match[1]?.trim() || fileName
+        rewritten = rewritten.replace(match[0], `> [缺失插图] ${label}`)
+        continue
+      }
+    }
+    rewritten = rewritten.replace(match[0], `![${match[1]}](${relativePath})`)
+  }
+  return rewritten
+}
+
+function resolveLocalAssetPath(stageSubject, remoteFileName) {
+  const localSubject = Object.keys(localSubjectToStageSubject).find(
+    (name) => localSubjectToStageSubject[name] === stageSubject,
+  )
+  if (!localSubject) return ''
+  const assetsDir = path.join(localSourceRoot, localSubject, 'assets')
+  if (!fs.existsSync(assetsDir)) return ''
+  const stem = path.parse(remoteFileName).name
+  for (const ext of ['.png', '.jpg', '.jpeg', '.webp', '.gif']) {
+    const candidate = path.join(assetsDir, `${stem}${ext}`)
+    if (fs.existsSync(candidate)) return candidate
+  }
+  return ''
+}
+
+function isCourseAssetUrl(url) {
+  return /^https?:\/\/(?:courses\.20060618\.xyz|20060618\.xyz)\/course-assets\//.test(url)
+}
+
+async function downloadBinary(url, filePath) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(20_000) })
+  if (!response.ok) {
+    throw new Error(`asset fetch failed ${response.status} for ${url}`)
+  }
+  const bytes = Buffer.from(await response.arrayBuffer())
+  fs.writeFileSync(filePath, bytes)
 }
 
 async function stageOnlineSummary({ slug, stageSubject }) {

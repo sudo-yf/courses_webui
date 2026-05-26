@@ -518,11 +518,17 @@ function noteRailToggleScript() {
     const button = document.querySelector('[data-rail-toggle]');
     if (!rail || !button) return;
     const key = 'course:note-rail-collapsed';
+    const activeItem = rail.querySelector('.note-item-active');
     const apply = (collapsed) => {
       page.classList.toggle('note-rail-collapsed', collapsed);
       button.setAttribute('aria-expanded', String(!collapsed));
       button.textContent = collapsed ? '展开左栏' : '收起左栏';
       localStorage.setItem(key, collapsed ? '1' : '0');
+      if (!collapsed && activeItem) {
+        requestAnimationFrame(() => {
+          activeItem.scrollIntoView({ block: 'nearest' });
+        });
+      }
     };
     const stored = localStorage.getItem(key);
     apply(stored === '1');
@@ -550,7 +556,9 @@ function noteLastReadScript(pageUrl, subjectSlug) {
 function buildNoteNavByPageUrl(bySubjectSlug) {
   const map = new Map()
   for (const [subjectSlug, pages] of Object.entries(bySubjectSlug)) {
-    const sorted = pages.slice().sort((a, b) => (a.date || a.mmdd).localeCompare(b.date || b.mmdd))
+    const sorted = pages
+      .slice()
+      .sort((a, b) => (b.date || b.mmdd).localeCompare(a.date || a.mmdd))
     for (const page of sorted) {
       map.set(page.pageUrl, renderNoteNav({ subjectSlug, pages: sorted, current: page }))
     }
@@ -1121,6 +1129,15 @@ function renderMarkdown(markdown, options = {}) {
       continue
     }
 
+    const thematicBreak = line.match(/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/)
+    if (thematicBreak) {
+      flushParagraph()
+      flushList()
+      flushBlockquote()
+      html.push('<hr>')
+      continue
+    }
+
     const heading = line.match(/^(#{1,6})\s+(.+)$/)
     if (heading) {
       flushParagraph()
@@ -1612,7 +1629,8 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 body.note-page {
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 body::before {
   content: "";
@@ -1653,6 +1671,9 @@ body.note-page::after {
   background: var(--surface-glass);
   backdrop-filter: blur(20px);
 }
+body.note-page .site-header {
+  position: sticky;
+}
 .site-title {
   color: var(--foreground);
   font-family: Georgia, "Times New Roman", "Songti SC", serif;
@@ -1687,8 +1708,9 @@ body.note-page::after {
   padding: calc(var(--header-height) + 4.5rem) 0 7rem;
 }
 body.note-page .shell {
-  height: 100svh;
-  padding: var(--header-height) 0 0 !important;
+  min-height: calc(100svh - var(--header-height));
+  height: auto;
+  padding: 1.25rem 0 5rem !important;
 }
 .home-layout {
   display: grid;
@@ -1736,26 +1758,27 @@ body.note-page .shell {
   overflow: hidden;
 }
 body.note-page .note-shell {
-  height: calc(100svh - var(--header-height));
-  align-items: stretch;
+  min-height: auto;
+  height: auto;
+  align-items: start;
 }
 body.note-page .note-rail,
 body.note-page .note {
   position: relative;
   top: auto;
+}
+body.note-page .note-rail {
+  height: auto;
+  max-height: calc(100svh - var(--header-height) - 1.75rem);
+  margin-top: 0;
+  overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
-body.note-page .note-rail {
-  height: calc(100% - 1.25rem);
-  margin-top: 1.25rem;
-}
 body.note-page .note {
-  height: 100%;
-  overflow: auto;
-}
-body.note-page .note {
-  padding-bottom: 1rem;
+  height: auto;
+  overflow: visible;
+  padding-bottom: 0;
 }
 body.note-rail-collapsed .note-shell {
   grid-template-columns: 0 minmax(0, 1fr);
@@ -1795,6 +1818,23 @@ body.note-rail-collapsed .rail-toggle {
   margin-top: 0;
   background: rgba(255, 252, 246, 0.96);
   backdrop-filter: blur(18px);
+}
+.note-switcher {
+  display: grid;
+  gap: 0.08rem;
+}
+.note-switcher .archive-item {
+  min-height: 0;
+  padding: 0.55rem 0;
+  grid-template-columns: 2rem minmax(0, 1fr);
+  gap: 0.75rem;
+}
+.note-switcher .archive-title {
+  font-size: 1rem;
+  line-height: 1.15;
+}
+.note-switcher .archive-number {
+  padding-top: 0.1rem;
 }
 .toc {
   display: grid;
@@ -1931,6 +1971,20 @@ h2 {
 }
 h3 { font-size: 1.35rem; margin-top: 2.2rem; }
 h4, h5, h6 { font-size: 1.1rem; margin-top: 1.5rem; }
+hr {
+  margin: 2.75rem 0;
+  border: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border-strong), transparent);
+}
+h2,
+h3,
+h4,
+h5,
+h6,
+hr {
+  scroll-margin-top: calc(var(--header-height) + 1.4rem);
+}
 a {
   color: var(--accent);
   text-decoration-thickness: 0.06em;
@@ -2285,9 +2339,6 @@ code { font-family: "JetBrains Mono", monospace; }
     grid-template-columns: 2.8rem minmax(0, 1fr);
   }
   .archive-code {
-    display: none;
-  }
-  .note-rail {
     display: none;
   }
   .exam-table {
