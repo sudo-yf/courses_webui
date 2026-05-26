@@ -524,7 +524,8 @@ function noteRailToggleScript() {
       button.textContent = collapsed ? '展开左栏' : '收起左栏';
       localStorage.setItem(key, collapsed ? '1' : '0');
     };
-    apply(localStorage.getItem(key) === '1');
+    const stored = localStorage.getItem(key);
+    apply(stored === '1');
     button.addEventListener('click', () => {
       apply(!page.classList.contains('note-rail-collapsed'));
     });
@@ -1774,8 +1775,9 @@ body.note-rail-collapsed .note {
   padding: 0.45rem 0.8rem;
   border: 1px solid var(--border-strong);
   border-radius: 999px;
-  background: var(--accent-soft);
+  background: rgba(255, 252, 246, 0.92);
   color: var(--foreground);
+  box-shadow: 0 10px 24px rgba(65, 49, 29, 0.08);
   cursor: pointer;
 }
 .rail-toggle:hover {
@@ -1784,6 +1786,15 @@ body.note-rail-collapsed .note {
 .rail-toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+body.note-rail-collapsed .rail-toggle {
+  position: fixed;
+  top: calc(var(--header-height) + 1.2rem);
+  left: max(1rem, calc((100vw - var(--wide)) / 2 + 1rem));
+  z-index: 12;
+  margin-top: 0;
+  background: rgba(255, 252, 246, 0.96);
+  backdrop-filter: blur(18px);
 }
 .toc {
   display: grid;
@@ -2247,6 +2258,9 @@ code { font-family: "JetBrains Mono", monospace; }
   .shell {
     width: min(100% - 1.25rem, var(--wide));
     padding: calc(var(--header-height) + 2.2rem) 0 5rem;
+  }
+  body.note-rail-collapsed .rail-toggle {
+    left: 1rem;
   }
   h1 {
     font-size: clamp(3.2rem, 17vw, 5rem);
